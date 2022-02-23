@@ -229,7 +229,7 @@ class Config:
             if 'reference' in deprecation_info:
                 warning_msg += ' More information can be found at ' \
                     f'{deprecation_info["reference"]}'
-            warnings.warn(warning_msg)
+            warnings.warn(warning_msg, DeprecationWarning)
 
         cfg_text = filename + '\n'
         with open(filename, 'r', encoding='utf-8') as f:
@@ -310,16 +310,19 @@ class Config:
                 if len(b) <= k:
                     raise KeyError(f'Index {k} exceeds the length of list {b}')
                 b[k] = Config._merge_a_into_b(v, b[k], allow_list_keys)
-            elif isinstance(v,
-                            dict) and k in b and not v.pop(DELETE_KEY, False):
-                allowed_types = (dict, list) if allow_list_keys else dict
-                if not isinstance(b[k], allowed_types):
-                    raise TypeError(
-                        f'{k}={v} in child config cannot inherit from base '
-                        f'because {k} is a dict in the child config but is of '
-                        f'type {type(b[k])} in base config. You may set '
-                        f'`{DELETE_KEY}=True` to ignore the base config')
-                b[k] = Config._merge_a_into_b(v, b[k], allow_list_keys)
+            elif isinstance(v, dict):
+                if k in b and not v.pop(DELETE_KEY, False):
+                    allowed_types = (dict, list) if allow_list_keys else dict
+                    if not isinstance(b[k], allowed_types):
+                        raise TypeError(
+                            f'{k}={v} in child config cannot inherit from '
+                            f'base because {k} is a dict in the child config '
+                            f'but is of type {type(b[k])} in base config. '
+                            f'You may set `{DELETE_KEY}=True` to ignore the '
+                            f'base config.')
+                    b[k] = Config._merge_a_into_b(v, b[k], allow_list_keys)
+                else:
+                    b[k] = ConfigDict(v)
             else:
                 b[k] = v
         return b
@@ -344,7 +347,7 @@ class Config:
                config str. Only py/yml/yaml/json type are supported now!
 
         Returns:
-            obj:`Config`: Config obj.
+            :obj:`Config`: Config obj.
         """
         if file_format not in ['.py', '.json', '.yaml', '.yml']:
             raise IOError('Only py/yml/yaml/json type are supported now!')
@@ -525,6 +528,16 @@ class Config:
     def __getstate__(self):
         return (self._cfg_dict, self._filename, self._text)
 
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        other = cls.__new__(cls)
+        memo[id(self)] = other
+
+        for key, value in self.__dict__.items():
+            super(Config, other).__setattr__(key, copy.deepcopy(value, memo))
+
+        return other
+
     def __setstate__(self, state):
         _cfg_dict, _filename, _text = state
         super(Config, self).__setattr__('_cfg_dict', _cfg_dict)
@@ -561,7 +574,7 @@ class Config:
             >>> assert cfg_dict == dict(
             ...     model=dict(backbone=dict(depth=50, with_cp=True)))
 
-            # Merge list element
+            >>> # Merge list element
             >>> cfg = Config(dict(pipeline=[
             ...     dict(type='LoadImage'), dict(type='LoadAnnotations')]))
             >>> options = dict(pipeline={'0': dict(type='SelfLoadImage')})

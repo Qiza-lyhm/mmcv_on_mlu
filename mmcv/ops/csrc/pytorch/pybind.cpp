@@ -1,4 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved
+#include <torch/extension.h>
+
 #include "pytorch_cpp_helper.hpp"
 
 std::string get_compiler_version();
@@ -240,6 +242,43 @@ void ball_query_forward(Tensor new_xyz_tensor, Tensor xyz_tensor,
                         Tensor idx_tensor, int b, int n, int m,
                         float min_radius, float max_radius, int nsample);
 
+template <unsigned NDim>
+std::vector<torch::Tensor> get_indice_pairs_forward(
+    torch::Tensor indices, int64_t batchSize,
+    std::vector<int64_t> outSpatialShape, std::vector<int64_t> spatialShape,
+    std::vector<int64_t> kernelSize, std::vector<int64_t> stride,
+    std::vector<int64_t> padding, std::vector<int64_t> dilation,
+    std::vector<int64_t> outPadding, int64_t _subM, int64_t _transpose);
+
+template <unsigned NDim>
+std::vector<Tensor> get_indice_pairs_backward(
+    Tensor indices, Tensor gridOut, int64_t batchSize,
+    std::vector<int64_t> outSpatialShape, std::vector<int64_t> spatialShape,
+    std::vector<int64_t> kernelSize, std::vector<int64_t> stride,
+    std::vector<int64_t> padding, std::vector<int64_t> dilation,
+    std::vector<int64_t> outPadding, int64_t _subM, int64_t _transpose);
+
+Tensor indice_conv_forward(Tensor features, Tensor filters, Tensor indicePairs,
+                           Tensor indiceNum, int64_t numActOut,
+                           int64_t _inverse, int64_t _subM);
+
+std::vector<Tensor> indice_conv_backward(Tensor features, Tensor filters,
+                                         Tensor outGrad, Tensor indicePairs,
+                                         Tensor indiceNum, int64_t _inverse,
+                                         int64_t _subM);
+
+Tensor fused_indice_conv_batchnorm_forward(Tensor features, Tensor filters,
+                                           Tensor bias, Tensor indicePairs,
+                                           Tensor indiceNum, int64_t numActOut,
+                                           int64_t _inverse, int64_t _subM);
+
+Tensor indice_maxpool_forward(Tensor features, Tensor indicePairs,
+                              Tensor indiceNum, int64_t numAct);
+
+Tensor indice_maxpool_backward(Tensor features, Tensor outFeatures,
+                               Tensor outGrad, Tensor indicePairs,
+                               Tensor indiceNum);
+
 Tensor bottom_pool_forward(Tensor input);
 
 Tensor bottom_pool_backward(Tensor input, Tensor grad_output);
@@ -273,13 +312,14 @@ Tensor fused_bias_leakyrelu(const Tensor &input, const Tensor &bias,
 
 void roi_align_rotated_forward(Tensor input, Tensor rois, Tensor output,
                                int pooled_height, int pooled_width,
-                               float spatial_scale, int sample_num,
+                               float spatial_scale, int sampling_ratio,
                                bool aligned, bool clockwise);
 
 void roi_align_rotated_backward(Tensor grad_output, Tensor rois,
                                 Tensor grad_input, int pooled_height,
                                 int pooled_width, float spatial_scale,
-                                int sample_num, bool aligned, bool clockwise);
+                                int sampling_ratio, bool aligned,
+                                bool clockwise);
 
 std::vector<torch::Tensor> dynamic_point_to_voxel_forward(
     const torch::Tensor &feats, const torch::Tensor &coors,
@@ -339,6 +379,41 @@ void correlation_backward(Tensor grad_output, Tensor input1, Tensor input2,
                           int kW, int patchH, int patchW, int padH, int padW,
                           int dilationH, int dilationW, int dilation_patchH,
                           int dilation_patchW, int dH, int dW);
+
+void rotated_feature_align_forward(const Tensor features,
+                                   const Tensor best_bboxes, Tensor output,
+                                   const float spatial_scale, const int points);
+
+void rotated_feature_align_backward(const Tensor top_grad,
+                                    const Tensor best_bboxes,
+                                    Tensor bottom_grad,
+                                    const float spatial_scale,
+                                    const int points);
+
+void riroi_align_rotated_forward(Tensor features, Tensor rois, Tensor output,
+                                 int pooled_height, int pooled_width,
+                                 float spatial_scale, int num_samples,
+                                 int num_orientations, bool clockwise);
+
+void riroi_align_rotated_backward(Tensor top_grad, Tensor rois,
+                                  Tensor bottom_grad, int pooled_height,
+                                  int pooled_width, float spatial_scale,
+                                  int num_samples, int num_orientations,
+                                  bool clockwise);
+
+void points_in_polygons_forward(Tensor points, Tensor polygons, Tensor output);
+
+void min_area_polygons(const Tensor pointsets, Tensor polygons);
+
+void active_rotated_filter_forward(const Tensor input, const Tensor indices,
+                                   Tensor output);
+
+void active_rotated_filter_backward(const Tensor grad_out, const Tensor indices,
+                                    Tensor grad_in);
+
+void convex_iou(const Tensor pointsets, const Tensor polygons, Tensor ious);
+
+void convex_giou(const Tensor pointsets, const Tensor polygons, Tensor output);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("upfirdn2d", &upfirdn2d, "upfirdn2d (CUDA)", py::arg("input"),
@@ -567,6 +642,54 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "sync_bn backward_data", py::arg("grad_output"), py::arg("weight"),
         py::arg("grad_weight"), py::arg("grad_bias"), py::arg("norm"),
         py::arg("std"), py::arg("grad_input"));
+  m.def("get_indice_pairs_2d_forward", &get_indice_pairs_forward<2>,
+        "get_indice_pairs_2d_forward", py::arg("indices"), py::arg("batchSize"),
+        py::arg("outSpatialShape"), py::arg("spatialShape"),
+        py::arg("kernelSize"), py::arg("stride"), py::arg("padding"),
+        py::arg("dilation"), py::arg("outPadding"), py::arg("_subM"),
+        py::arg("_transpose"));
+  m.def("get_indice_pairs_3d_forward", &get_indice_pairs_forward<3>,
+        "get_indice_pairs_3d_forward", py::arg("indices"), py::arg("batchSize"),
+        py::arg("outSpatialShape"), py::arg("spatialShape"),
+        py::arg("kernelSize"), py::arg("stride"), py::arg("padding"),
+        py::arg("dilation"), py::arg("outPadding"), py::arg("_subM"),
+        py::arg("_transpose"));
+  m.def("get_indice_pairs_4d_forward", &get_indice_pairs_forward<4>,
+        "get_indice_pairs_4d_forward", py::arg("indices"), py::arg("batchSize"),
+        py::arg("outSpatialShape"), py::arg("spatialShape"),
+        py::arg("kernelSize"), py::arg("stride"), py::arg("padding"),
+        py::arg("dilation"), py::arg("outPadding"), py::arg("_subM"),
+        py::arg("_transpose"));
+  m.def("get_indice_pairs_2d_backward", &get_indice_pairs_backward<2>,
+        "get_indice_pairs_2d_backward", py::arg("indices"), py::arg("gridOut"),
+        py::arg("batchSize"), py::arg("outSpatialShape"),
+        py::arg("spatialShape"), py::arg("kernelSize"), py::arg("stride"),
+        py::arg("padding"), py::arg("dilation"), py::arg("outPadding"),
+        py::arg("_subM"), py::arg("_transpose"));
+  m.def("get_indice_pairs_3d_backward", &get_indice_pairs_backward<3>,
+        "get_indice_pairs_3d_backward", py::arg("indices"), py::arg("gridOut"),
+        py::arg("batchSize"), py::arg("outSpatialShape"),
+        py::arg("spatialShape"), py::arg("kernelSize"), py::arg("stride"),
+        py::arg("padding"), py::arg("dilation"), py::arg("outPadding"),
+        py::arg("_subM"), py::arg("_transpose"));
+  m.def("indice_conv_forward", &indice_conv_forward, "indice_conv_forward",
+        py::arg("features"), py::arg("filters"), py::arg("indicePairs"),
+        py::arg("indiceNum"), py::arg("numActOut"), py::arg("_inverse"),
+        py::arg("_subM"));
+  m.def("indice_conv_backward", &indice_conv_backward, "indice_conv_backward",
+        py::arg("features"), py::arg("filters"), py::arg("outGrad"),
+        py::arg("indicePairs"), py::arg("indiceNum"), py::arg("_inverse"),
+        py::arg("_subM"));
+  m.def("fused_indice_conv_forward", &fused_indice_conv_batchnorm_forward,
+        "fused_indice_conv_forward", py::arg("features"), py::arg("filters"),
+        py::arg("bias"), py::arg("indicePairs"), py::arg("indiceNum"),
+        py::arg("numActOut"), py::arg("_inverse"), py::arg("_subM"));
+  m.def("indice_maxpool_forward", &indice_maxpool_forward,
+        "indice_maxpool_forward", py::arg("features"), py::arg("indicePairs"),
+        py::arg("indiceNum"), py::arg("numAct"));
+  m.def("indice_maxpool_backward", &indice_maxpool_backward,
+        "indice_maxpool_backward", py::arg("features"), py::arg("outFeatures"),
+        py::arg("outGrad"), py::arg("indicePairs"), py::arg("indiceNum"));
   m.def("psamask_forward", &psamask_forward, "PSAMASK forward (CPU/CUDA)",
         py::arg("input"), py::arg("output"), py::arg("psa_type"),
         py::arg("num_"), py::arg("h_feature"), py::arg("w_feature"),
@@ -614,13 +737,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("roi_align_rotated_forward", &roi_align_rotated_forward,
         "roi_align_rotated forward", py::arg("input"), py::arg("rois"),
         py::arg("output"), py::arg("pooled_height"), py::arg("pooled_width"),
-        py::arg("spatial_scale"), py::arg("sample_num"), py::arg("aligned"),
+        py::arg("spatial_scale"), py::arg("sampling_ratio"), py::arg("aligned"),
         py::arg("clockwise"));
   m.def("roi_align_rotated_backward", &roi_align_rotated_backward,
         "roi_align_rotated backward", py::arg("rois"), py::arg("grad_input"),
         py::arg("grad_output"), py::arg("pooled_height"),
         py::arg("pooled_width"), py::arg("spatial_scale"),
-        py::arg("sample_num"), py::arg("aligned"), py::arg("clockwise"));
+        py::arg("sampling_ratio"), py::arg("aligned"), py::arg("clockwise"));
   m.def("dynamic_point_to_voxel_forward", &dynamic_point_to_voxel_forward,
         "dynamic_point_to_voxel_forward", py::arg("feats"), py::arg("coors"),
         py::arg("reduce_type"));
@@ -686,4 +809,38 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "roiaware_pool3d_backward", py::arg("pts_idx_of_voxels"),
         py::arg("argmax"), py::arg("grad_out"), py::arg("grad_in"),
         py::arg("pool_method"));
+  m.def("rotated_feature_align_forward", &rotated_feature_align_forward,
+        "Feature Refine forward (CUDA)", py::arg("features"),
+        py::arg("best_bboxes"), py::arg("output"), py::arg("spatial_scale"),
+        py::arg("points"));
+  m.def("rotated_feature_align_backward", &rotated_feature_align_backward,
+        "Feature Refine backward (CUDA)", py::arg("top_grad"),
+        py::arg("best_bboxes"), py::arg("bottom_grad"),
+        py::arg("spatial_scale"), py::arg("points"));
+  m.def("riroi_align_rotated_forward", &riroi_align_rotated_forward,
+        "riroi_align_rotated forward", py::arg("features"), py::arg("rois"),
+        py::arg("output"), py::arg("pooled_height"), py::arg("pooled_width"),
+        py::arg("spatial_scale"), py::arg("num_samples"),
+        py::arg("num_orientations"), py::arg("clockwise"));
+  m.def("riroi_align_rotated_backward", &riroi_align_rotated_backward,
+        "riroi_align_rotated backward", py::arg("top_grad"), py::arg("rois"),
+        py::arg("bottom_grad"), py::arg("pooled_height"),
+        py::arg("pooled_width"), py::arg("spatial_scale"),
+        py::arg("num_samples"), py::arg("num_orientations"),
+        py::arg("clockwise"));
+  m.def("points_in_polygons_forward", &points_in_polygons_forward,
+        "points_in_polygons_forward", py::arg("points"), py::arg("polygons"),
+        py::arg("output"));
+  m.def("min_area_polygons", &min_area_polygons, "min_area_polygons",
+        py::arg("pointsets"), py::arg("polygons"));
+  m.def("active_rotated_filter_forward", &active_rotated_filter_forward,
+        "active_rotated_filter_forward", py::arg("input"), py::arg("indices"),
+        py::arg("output"));
+  m.def("active_rotated_filter_backward", &active_rotated_filter_backward,
+        "active_rotated_filter_backward", py::arg("grad_out"),
+        py::arg("indices"), py::arg("grad_in"));
+  m.def("convex_iou", &convex_iou, "convex_iou", py::arg("pointsets"),
+        py::arg("polygons"), py::arg("ious"));
+  m.def("convex_giou", &convex_giou, "convex_giou", py::arg("pointsets"),
+        py::arg("polygons"), py::arg("output"));
 }
